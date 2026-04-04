@@ -297,22 +297,29 @@ export default function App() {
     recognitionRef.current = r;
   };
 
-  // ═══ Play Mew's voice — triggered by user tap (works on iPhone) ═══
-  const playMewVoice = (text) => {
+  // ═══ Play Mew's voice — uses Edge TTS for cute child voice ═══
+  const playMewVoice = async (text) => {
     if (!text) return;
-    // Try speechSynthesis first (user initiated, so it works)
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = 'zh-CN';
-      u.rate = 1.1;
-      u.pitch = 1.5;
-      const voices = window.speechSynthesis.getVoices();
-      const best = voices.find(v => v.lang.includes('zh') && (v.name.includes('Ting') || v.name.includes('Female') || v.name.includes('女')))
-        || voices.find(v => v.lang.includes('zh'))
-        || voices[0];
-      if (best) u.voice = best;
-      window.speechSynthesis.speak(u);
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text.slice(0, 300) }),
+      });
+      if (!res.ok) throw new Error('TTS failed');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+    } catch (e) {
+      // Fallback to browser TTS
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = 'zh-CN'; u.rate = 1.1; u.pitch = 1.5;
+        window.speechSynthesis.speak(u);
+      }
     }
   };
 
