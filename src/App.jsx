@@ -304,25 +304,6 @@ export default function App() {
     setRecognizedText('');
     if (!text.trim()) return;
 
-    // ═══ iOS Safari fix: warm up speechSynthesis in sync user gesture ═══
-    let pendingUtterance = null;
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const warmup = new SpeechSynthesisUtterance(' ');
-      warmup.volume = 0.01;
-      warmup.rate = 10;
-      window.speechSynthesis.speak(warmup);
-      pendingUtterance = new SpeechSynthesisUtterance('');
-      pendingUtterance.lang = 'zh-CN';
-      pendingUtterance.rate = 1.1;
-      pendingUtterance.pitch = 1.6;
-      const voices = window.speechSynthesis.getVoices();
-      const zhVoice = voices.find(v => v.lang.includes('zh') && (v.name.includes('Ting-Ting') || v.name.includes('Female') || v.name.includes('Mei')))
-        || voices.find(v => v.lang.includes('zh'))
-        || voices[0];
-      if (zhVoice) pendingUtterance.voice = zhVoice;
-    }
-
     setVoiceMessages(m => [...m, { from: 'user', text }]);
     setMewSpeaking(true);
     setMewMood('thinking');
@@ -367,17 +348,36 @@ export default function App() {
       setVoiceMessages(m => [...m, { from: 'mew', text: finalReply }]);
       setMewMood('happy');
 
-      // Speak using pre-warmed utterance (iOS Safari compatible)
-      if (finalReply && pendingUtterance) {
-        window.speechSynthesis.cancel();
-        pendingUtterance.text = finalReply;
-        const alive = setInterval(() => { if (!window.speechSynthesis.speaking) { clearInterval(alive); return; } window.speechSynthesis.pause(); window.speechSynthesis.resume(); }, 5000);
-        pendingUtterance.onend = () => { clearInterval(alive); setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
-        pendingUtterance.onerror = () => { clearInterval(alive); setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
-        setTimeout(() => window.speechSynthesis.speak(pendingUtterance), 150);
-      } else {
-        setMewSpeaking(false);
-        setTimeout(() => setMewMood('idle'), 2000);
+      // ═══ TTS via Audio element — works on iPhone ═══
+      try {
+        const ttsText = encodeURIComponent(finalReply.slice(0, 200));
+        const audio = new Audio(`https://translate.google.com/translate_tts?ie=UTF-8&tl=zh-CN&client=tw-ob&q=${ttsText}`);
+        audio.playbackRate = 1.1;
+        audio.onended = () => { setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
+        audio.onerror = () => {
+          // Fallback: try speechSynthesis
+          if ('speechSynthesis' in window) {
+            const u = new SpeechSynthesisUtterance(finalReply);
+            u.lang = 'zh-CN'; u.rate = 1.1; u.pitch = 1.5;
+            u.onend = () => { setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
+            window.speechSynthesis.speak(u);
+          } else {
+            setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000);
+          }
+        };
+        audio.play().catch(() => {
+          // If autoplay blocked, fallback to speechSynthesis
+          if ('speechSynthesis' in window) {
+            const u = new SpeechSynthesisUtterance(finalReply);
+            u.lang = 'zh-CN'; u.rate = 1.1; u.pitch = 1.5;
+            u.onend = () => { setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
+            window.speechSynthesis.speak(u);
+          } else {
+            setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000);
+          }
+        });
+      } catch (audioErr) {
+        setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000);
       }
     } catch (e) {
       setStreamingText('');
