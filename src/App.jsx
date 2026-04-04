@@ -149,8 +149,10 @@ export default function App() {
   const [milestones, setMilestones] = useState([]);
   const [skills, setSkills] = useState([]);
   const [isRecording, setIsRecording] = useState(false);
-  const [voiceMessages, setVoiceMessages] = useState([{ from: 'mew', dur: 4, text: '按住按钮跟梦幻说话吧！' }]);
+  const [voiceMessages, setVoiceMessages] = useState([{ from: 'mew', text: '你好呀！按住下面的按钮跟梦幻说话吧！梦～ ✨' }]);
   const [mewSpeaking, setMewSpeaking] = useState(false);
+  const [recognizedText, setRecognizedText] = useState('');
+  const recognitionRef = useRef(null);
   const endRef = useRef(null);
 
   // ═══ NEW: Track daily upload status (once per day per category) ═══
@@ -217,7 +219,7 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [stats, mewLv, mewXp, streak]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [voiceMessages]);
+  useEffect(() => { setTimeout(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), 100); }, [voiceMessages]);
 
   // Auto mood cycle
   useEffect(() => {
@@ -280,19 +282,73 @@ export default function App() {
     triggerMew('task_done');
   };
 
-  const startRec = () => setIsRecording(true);
-  const stopRec = () => {
+  // ═══ Speech Recognition (voice → text) ═══
+  const startRec = () => {
+    setIsRecording(true);
+    setRecognizedText('');
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) { setRecognizedText('浏览器不支持语音识别'); return; }
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'zh-CN';
+    recognition.interimResults = true;
+    recognition.continuous = true;
+    recognition.onresult = (e) => {
+      let text = '';
+      for (let i = 0; i < e.results.length; i++) text += e.results[i][0].transcript;
+      setRecognizedText(text);
+    };
+    recognition.onerror = () => {};
+    recognition.start();
+    recognitionRef.current = recognition;
+  };
+
+  const stopRec = async () => {
     setIsRecording(false);
-    const dur = [2, 3, 4, 5][Math.floor(Math.random() * 4)];
-    setVoiceMessages(m => [...m, { from: 'user', dur }]);
-    setMewSpeaking(true); setMewMood('thinking');
-    setTimeout(() => {
-      const d = [3, 4, 5][Math.floor(Math.random() * 3)];
-      const rp = ['梦幻觉得说得对呢！✨', '嗯嗯！梦幻也这么想！', '好棒！梦幻为你加油！💪', '梦幻今天特别开心！', '哇，梦幻学到了新东西！', '梦幻最喜欢聊天了～'];
-      setVoiceMessages(m => [...m, { from: 'mew', dur: d, text: rp[Math.floor(Math.random() * rp.length)] }]);
-      setMewSpeaking(false); setMewMood('happy');
-      setTimeout(() => setMewMood('idle'), 3000);
-    }, 2000);
+    if (recognitionRef.current) { recognitionRef.current.stop(); recognitionRef.current = null; }
+    const text = recognizedText || '';
+    if (!text.trim()) { setRecognizedText(''); return; }
+
+    // Add user message
+    setVoiceMessages(m => [...m, { from: 'user', text }]);
+    setRecognizedText('');
+    setMewSpeaking(true);
+    setMewMood('thinking');
+
+    // Call Claude API
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, playerName: player?.name, stats, mewLevel: mewLv }),
+      });
+      const data = await res.json();
+      const reply = data.reply || '梦幻有点迷糊了...再说一次好吗？梦～';
+      setVoiceMessages(m => [...m, { from: 'mew', text: reply }]);
+      setMewMood('happy');
+
+      // ═══ Speech Synthesis (text → voice) — Mew speaks! ═══
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(reply);
+        utter.lang = 'zh-CN';
+        utter.rate = 1.1;
+        utter.pitch = 1.6; // High pitch for cute Mew voice
+        const voices = window.speechSynthesis.getVoices();
+        const zhVoice = voices.find(v => v.lang.includes('zh') && v.name.includes('Female'))
+          || voices.find(v => v.lang.includes('zh'))
+          || voices[0];
+        if (zhVoice) utter.voice = zhVoice;
+        utter.onend = () => { setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
+        window.speechSynthesis.speak(utter);
+      } else {
+        setMewSpeaking(false);
+        setTimeout(() => setMewMood('idle'), 2000);
+      }
+    } catch (e) {
+      setVoiceMessages(m => [...m, { from: 'mew', text: '梦幻暂时听不清...等一下再试试？' }]);
+      setMewSpeaking(false);
+      setMewMood('idle');
+    }
   };
 
   // ═══ LOGIN GATE ═══
@@ -426,7 +482,7 @@ export default function App() {
           </div>
         </div>}
 
-        {/* ═══ VOICE ═══ */}
+        {/* ═══ VOICE — Real speech interaction ═══ */}
         {page === 'voice' && <div className="slide-in flex flex-col" style={{ padding: 14, height: 'calc(100vh - 76px)' }}>
           <div style={{ background: 'linear-gradient(135deg,#E03030,#C42020)', borderRadius: 18, padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
@@ -434,31 +490,37 @@ export default function App() {
             </div>
             <div><p style={{ fontSize: 13, color: 'white', fontWeight: 700 }}>与梦幻语音对话</p><p style={{ fontSize: 10, color: mewSpeaking ? '#FFD0D0' : '#C0FFC0' }}>{mewSpeaking ? '🔊 梦幻正在说话...' : '● 在线'}</p></div>
           </div>
+
           <div className="flex-1 overflow-y-auto" style={{ marginBottom: 6 }}>
             {voiceMessages.map((m, i) => (
               <div key={i} className={`flex ${m.from === 'user' ? 'justify-end' : 'justify-start'} mb-2.5`}>
-                {m.from === 'mew' && <div style={{ width: 28, height: 28, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, marginRight: 5, marginTop: 12 }}><img src="/mew-happy.gif" alt="" style={{ width: 28, height: 28, objectFit: 'cover' }} /></div>}
-                <div style={{ maxWidth: '75%' }}>
+                {m.from === 'mew' && <div style={{ width: 30, height: 30, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, marginRight: 6, marginTop: 12 }}><img src="/mew-happy.gif" alt="" style={{ width: 30, height: 30, objectFit: 'cover' }} /></div>}
+                <div style={{ maxWidth: '78%' }}>
                   {m.from === 'mew' && <span style={{ fontSize: 9, color: '#B83280', fontWeight: 600, display: 'block', marginBottom: 2 }}>梦幻</span>}
-                  <div style={{ background: m.from === 'user' ? 'linear-gradient(135deg,#3B82C4,#2B6CB0)' : 'white', borderRadius: 16, padding: '8px 12px', borderBottomLeftRadius: m.from === 'mew' ? 4 : 16, borderBottomRightRadius: m.from === 'user' ? 4 : 16, border: m.from === 'mew' ? '1.5px solid #F0F0F0' : 'none' }}>
-                    <div className="flex items-center gap-2">
-                      <span style={{ fontSize: 12, color: m.from === 'user' ? 'white' : '#E03030', cursor: 'pointer' }}>▶</span>
-                      <div className="flex items-end gap-0.5" style={{ height: 16 }}>{[...Array(12)].map((_, j) => <div key={j} style={{ width: 2, height: 2 + Math.random() * 12, background: m.from === 'user' ? 'rgba(255,255,255,0.5)' : '#E0303070', borderRadius: 2 }} />)}</div>
-                      <span style={{ fontSize: 10, color: m.from === 'user' ? 'rgba(255,255,255,0.7)' : '#BBB' }}>{m.dur}″</span>
-                    </div>
-                    {m.from === 'mew' && m.text && <p style={{ fontSize: 10, color: '#999', marginTop: 3, fontStyle: 'italic' }}>{m.text}</p>}
+                  <div style={{ background: m.from === 'user' ? 'linear-gradient(135deg,#3B82C4,#2B6CB0)' : 'white', borderRadius: 16, padding: '10px 14px', borderBottomLeftRadius: m.from === 'mew' ? 4 : 16, borderBottomRightRadius: m.from === 'user' ? 4 : 16, boxShadow: '0 1px 4px rgba(0,0,0,0.05)', border: m.from === 'mew' ? '1.5px solid #F0F0F0' : 'none' }}>
+                    <p style={{ fontSize: 13, color: m.from === 'user' ? 'white' : '#444', lineHeight: 1.6, margin: 0 }}>{m.text}</p>
                   </div>
                 </div>
               </div>
             ))}
-            {mewSpeaking && <div className="flex justify-start mb-2.5"><div style={{ width: 28, height: 28, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, marginRight: 5 }}><img src="/mew-idle.gif" alt="" style={{ width: 28, height: 28, objectFit: 'cover' }} /></div><div style={{ background: 'white', borderRadius: 16, padding: '8px 12px', borderBottomLeftRadius: 4, border: '1.5px solid #F0F0F0' }}><VoiceWave active={true} /></div></div>}
+            {mewSpeaking && <div className="flex justify-start mb-2.5">
+              <div style={{ width: 30, height: 30, borderRadius: '50%', overflow: 'hidden', flexShrink: 0, marginRight: 6 }}><img src="/mew-idle.gif" alt="" style={{ width: 30, height: 30, objectFit: 'cover' }} /></div>
+              <div style={{ background: 'white', borderRadius: 16, padding: '10px 14px', borderBottomLeftRadius: 4, border: '1.5px solid #F0F0F0' }}>
+                <p style={{ fontSize: 12, color: '#BBB' }}>梦幻正在思考...</p>
+                <VoiceWave active={true} />
+              </div>
+            </div>}
             <div ref={endRef} />
           </div>
+
+          {/* Recording area */}
           <div className="flex flex-col items-center gap-2 py-3" style={{ background: 'white', borderRadius: 18, border: '2px solid #F0F0F0' }}>
             {isRecording && <VoiceWave active={true} />}
-            <p style={{ fontSize: 10, color: isRecording ? '#E03030' : '#BBB' }}>{isRecording ? '正在录音...松开发送' : '按住说话'}</p>
-            <button onMouseDown={startRec} onMouseUp={stopRec} onTouchStart={e => { e.preventDefault(); startRec(); }} onTouchEnd={stopRec} className={isRecording ? 'rec-pulse' : ''} style={{ width: 60, height: 60, borderRadius: '50%', background: isRecording ? '#C02020' : 'linear-gradient(135deg,#E03030,#E05050)', border: '4px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 3px 14px rgba(224,48,48,0.25)', cursor: 'pointer' }}>
-              <span style={{ fontSize: 22, color: 'white' }}>🎙</span>
+            {isRecording && recognizedText && <p style={{ fontSize: 12, color: '#444', padding: '0 16px', textAlign: 'center', maxHeight: 40, overflow: 'hidden' }}>{recognizedText}</p>}
+            <p style={{ fontSize: 10, color: isRecording ? '#E03030' : '#BBB', fontWeight: 500 }}>{isRecording ? '正在听...松开发送' : '按住说话'}</p>
+            <button onMouseDown={startRec} onMouseUp={stopRec} onTouchStart={e => { e.preventDefault(); startRec(); }} onTouchEnd={stopRec}
+              className={isRecording ? 'rec-pulse' : ''} style={{ width: 64, height: 64, borderRadius: '50%', background: isRecording ? '#C02020' : 'linear-gradient(135deg,#E03030,#E05050)', border: '4px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: isRecording ? '0 0 24px rgba(224,48,48,0.4)' : '0 3px 14px rgba(224,48,48,0.25)', cursor: 'pointer' }}>
+              <span style={{ fontSize: 24, color: 'white' }}>🎙</span>
             </button>
           </div>
         </div>}
