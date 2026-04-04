@@ -297,6 +297,25 @@ export default function App() {
     recognitionRef.current = r;
   };
 
+  // ═══ Play Mew's voice — triggered by user tap (works on iPhone) ═══
+  const playMewVoice = (text) => {
+    if (!text) return;
+    // Try speechSynthesis first (user initiated, so it works)
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'zh-CN';
+      u.rate = 1.1;
+      u.pitch = 1.5;
+      const voices = window.speechSynthesis.getVoices();
+      const best = voices.find(v => v.lang.includes('zh') && (v.name.includes('Ting') || v.name.includes('Female') || v.name.includes('女')))
+        || voices.find(v => v.lang.includes('zh'))
+        || voices[0];
+      if (best) u.voice = best;
+      window.speechSynthesis.speak(u);
+    }
+  };
+
   const stopRec = async () => {
     setIsRecording(false);
     if (recognitionRef.current) { recognitionRef.current.stop(); recognitionRef.current = null; }
@@ -347,38 +366,8 @@ export default function App() {
       setStreamingText('');
       setVoiceMessages(m => [...m, { from: 'mew', text: finalReply }]);
       setMewMood('happy');
-
-      // ═══ TTS via Audio element — works on iPhone ═══
-      try {
-        const ttsText = encodeURIComponent(finalReply.slice(0, 200));
-        const audio = new Audio(`https://translate.google.com/translate_tts?ie=UTF-8&tl=zh-CN&client=tw-ob&q=${ttsText}`);
-        audio.playbackRate = 1.1;
-        audio.onended = () => { setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
-        audio.onerror = () => {
-          // Fallback: try speechSynthesis
-          if ('speechSynthesis' in window) {
-            const u = new SpeechSynthesisUtterance(finalReply);
-            u.lang = 'zh-CN'; u.rate = 1.1; u.pitch = 1.5;
-            u.onend = () => { setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
-            window.speechSynthesis.speak(u);
-          } else {
-            setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000);
-          }
-        };
-        audio.play().catch(() => {
-          // If autoplay blocked, fallback to speechSynthesis
-          if ('speechSynthesis' in window) {
-            const u = new SpeechSynthesisUtterance(finalReply);
-            u.lang = 'zh-CN'; u.rate = 1.1; u.pitch = 1.5;
-            u.onend = () => { setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
-            window.speechSynthesis.speak(u);
-          } else {
-            setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000);
-          }
-        });
-      } catch (audioErr) {
-        setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000);
-      }
+      setMewSpeaking(false);
+      setTimeout(() => setMewMood('idle'), 3000);
     } catch (e) {
       setStreamingText('');
       setVoiceMessages(m => [...m, { from: 'mew', text: '梦幻暂时听不清...再试试？' }]);
@@ -534,6 +523,7 @@ export default function App() {
                   {m.from === 'mew' && <span style={{ fontSize: 9, color: '#B83280', fontWeight: 600, display: 'block', marginBottom: 2 }}>梦幻</span>}
                   <div style={{ background: m.from === 'user' ? 'linear-gradient(135deg,#3B82C4,#2B6CB0)' : 'white', borderRadius: 16, padding: '10px 14px', borderBottomLeftRadius: m.from === 'mew' ? 4 : 16, borderBottomRightRadius: m.from === 'user' ? 4 : 16, boxShadow: '0 1px 4px rgba(0,0,0,0.05)', border: m.from === 'mew' ? '1.5px solid #F0F0F0' : 'none' }}>
                     <p style={{ fontSize: 13, color: m.from === 'user' ? 'white' : '#444', lineHeight: 1.6, margin: 0 }}>{m.text}</p>
+                    {m.from === 'mew' && <button onClick={() => playMewVoice(m.text)} style={{ marginTop: 6, padding: '4px 12px', borderRadius: 14, background: '#FFF0F5', border: '1.5px solid #FFE0EC', color: '#E03030', fontSize: 11, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>🔊 听梦幻说</button>}
                   </div>
                 </div>
               </div>
