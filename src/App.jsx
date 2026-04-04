@@ -304,6 +304,25 @@ export default function App() {
     setRecognizedText('');
     if (!text.trim()) return;
 
+    // ═══ iOS Safari fix: warm up speechSynthesis in sync user gesture ═══
+    let pendingUtterance = null;
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const warmup = new SpeechSynthesisUtterance(' ');
+      warmup.volume = 0.01;
+      warmup.rate = 10;
+      window.speechSynthesis.speak(warmup);
+      pendingUtterance = new SpeechSynthesisUtterance('');
+      pendingUtterance.lang = 'zh-CN';
+      pendingUtterance.rate = 1.1;
+      pendingUtterance.pitch = 1.6;
+      const voices = window.speechSynthesis.getVoices();
+      const zhVoice = voices.find(v => v.lang.includes('zh') && (v.name.includes('Ting-Ting') || v.name.includes('Female') || v.name.includes('Mei')))
+        || voices.find(v => v.lang.includes('zh'))
+        || voices[0];
+      if (zhVoice) pendingUtterance.voice = zhVoice;
+    }
+
     setVoiceMessages(m => [...m, { from: 'user', text }]);
     setMewSpeaking(true);
     setMewMood('thinking');
@@ -348,16 +367,14 @@ export default function App() {
       setVoiceMessages(m => [...m, { from: 'mew', text: finalReply }]);
       setMewMood('happy');
 
-      // Speak the reply
-      if ('speechSynthesis' in window) {
+      // Speak using pre-warmed utterance (iOS Safari compatible)
+      if (finalReply && pendingUtterance) {
         window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(finalReply);
-        u.lang = 'zh-CN'; u.rate = 1.1; u.pitch = 1.6;
-        const voices = window.speechSynthesis.getVoices();
-        const v = voices.find(v => v.lang.includes('zh') && v.name.includes('Female')) || voices.find(v => v.lang.includes('zh'));
-        if (v) u.voice = v;
-        u.onend = () => { setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
-        window.speechSynthesis.speak(u);
+        pendingUtterance.text = finalReply;
+        const alive = setInterval(() => { if (!window.speechSynthesis.speaking) { clearInterval(alive); return; } window.speechSynthesis.pause(); window.speechSynthesis.resume(); }, 5000);
+        pendingUtterance.onend = () => { clearInterval(alive); setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
+        pendingUtterance.onerror = () => { clearInterval(alive); setMewSpeaking(false); setTimeout(() => setMewMood('idle'), 2000); };
+        setTimeout(() => window.speechSynthesis.speak(pendingUtterance), 150);
       } else {
         setMewSpeaking(false);
         setTimeout(() => setMewMood('idle'), 2000);
