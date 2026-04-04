@@ -71,6 +71,24 @@ const VoiceWave = ({ active, color = '#E03030' }) => {
   return <div className="flex items-center justify-center gap-0.5" style={{ height: 24 }}>{bars.map((h, i) => <div key={i} style={{ width: 2.5, height: h, borderRadius: 2, background: color, opacity: active ? 0.7 : 0.2, transition: 'height 0.08s ease' }} />)}</div>;
 };
 
+// ═══ Helper: get today's date string ═══
+const getToday = () => new Date().toISOString().split('T')[0];
+
+// ═══ Helper: get this week's dates (Mon-Sun) ═══
+const getWeekDates = () => {
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun, 1=Mon...
+  const monday = new Date(now);
+  monday.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
+  const dates = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    dates.push(d.toISOString().split('T')[0]);
+  }
+  return dates;
+};
+
 // ═══ LOGIN SCREEN ═══
 const LoginScreen = ({ onLogin }) => {
   const [name, setName] = useState('');
@@ -101,7 +119,6 @@ const LoginScreen = ({ onLogin }) => {
       </div>
       <h1 style={{ fontFamily: "'Chakra Petch'", fontSize: 22, fontWeight: 700, color: '#E03030', marginBottom: 4 }}>MEW COMPANION</h1>
       <p style={{ fontSize: 13, color: '#888', marginBottom: 24 }}>{isNew ? '创建你的训练师档案' : '欢迎回来，训练师！'}</p>
-
       <div style={{ width: '100%', maxWidth: 300 }}>
         <input value={name} onChange={e => setName(e.target.value)} placeholder="你的名字" style={{ width: '100%', padding: '12px 16px', borderRadius: 14, border: '2px solid #F0F0F0', fontSize: 15, marginBottom: 10, background: 'white' }} />
         <input value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} placeholder="4位PIN码" type="password" inputMode="numeric" maxLength={4} style={{ width: '100%', padding: '12px 16px', borderRadius: 14, border: '2px solid #F0F0F0', fontSize: 15, marginBottom: 10, background: 'white', letterSpacing: 8 }} />
@@ -136,6 +153,22 @@ export default function App() {
   const [mewSpeaking, setMewSpeaking] = useState(false);
   const endRef = useRef(null);
 
+  // ═══ NEW: Track daily upload status (once per day per category) ═══
+  const [todayUploads, setTodayUploads] = useState({ power: false, wisdom: false, vitality: false });
+
+  // ═══ NEW: Daily routine tasks (eating, brushing) ═══
+  const [routines, setRoutines] = useState([
+    { id: 'morning_brush', icon: '🪥', title: '早上刷牙', minutes: 3, done: false, color: '#3B82C4' },
+    { id: 'breakfast', icon: '🥣', title: '吃早餐', minutes: 20, done: false, color: '#F59E0B' },
+    { id: 'lunch', icon: '🍱', title: '吃午餐', minutes: 30, done: false, color: '#F59E0B' },
+    { id: 'dinner', icon: '🍽', title: '吃晚餐', minutes: 30, done: false, color: '#F59E0B' },
+    { id: 'evening_brush', icon: '🪥', title: '晚上刷牙', minutes: 3, done: false, color: '#8B5CF6' },
+  ]);
+  const [activeRoutineTimer, setActiveRoutineTimer] = useState(null);
+
+  // ═══ NEW: Checkin dates for weekly view ═══
+  const [checkinDates, setCheckinDates] = useState([]);
+
   // Load data after login
   useEffect(() => {
     if (!player) return;
@@ -151,6 +184,27 @@ export default function App() {
       setMilestones(await db.getMilestones(player.id));
       setSkills(await db.getMewSkills(player.id));
       setMewMsg(`${player.name}，今天也要一起加油哦！`);
+
+      // Load today's upload status from localStorage
+      const today = getToday();
+      const savedUploads = localStorage.getItem(`uploads_${player.id}_${today}`);
+      if (savedUploads) setTodayUploads(JSON.parse(savedUploads));
+
+      // Load routine status
+      const savedRoutines = localStorage.getItem(`routines_${player.id}_${today}`);
+      if (savedRoutines) setRoutines(JSON.parse(savedRoutines));
+
+      // Load checkin dates
+      const savedCheckins = localStorage.getItem(`checkins_${player.id}`);
+      if (savedCheckins) setCheckinDates(JSON.parse(savedCheckins));
+
+      // Auto checkin today
+      const checkins = savedCheckins ? JSON.parse(savedCheckins) : [];
+      if (!checkins.includes(today)) {
+        checkins.push(today);
+        localStorage.setItem(`checkins_${player.id}`, JSON.stringify(checkins));
+        setCheckinDates(checkins);
+      }
     })();
   }, [player]);
 
@@ -158,7 +212,7 @@ export default function App() {
   useEffect(() => {
     if (!player) return;
     const timer = setTimeout(() => {
-      db.updateStats(player.id, { ...stats, mewLevel: mewLv, mewXp: mewXp, streak, lastCheckin: new Date().toISOString().split('T')[0] });
+      db.updateStats(player.id, { ...stats, mewLevel: mewLv, mewXp: mewXp, streak, lastCheckin: getToday() });
     }, 1000);
     return () => clearTimeout(timer);
   }, [stats, mewLv, mewXp, streak]);
@@ -176,7 +230,7 @@ export default function App() {
 
   const triggerMew = useCallback((type) => {
     const reactions = {
-      upload_power: { moods: ['surprised', 'excited', 'happy', 'idle'], msgs: [`哇！${player?.name} 的射门好有力！⚽`, '太厉害了！梦幻感受到了力量！'] },
+      upload_power: { moods: ['surprised', 'excited', 'happy', 'idle'], msgs: [`哇！${player?.name} 的训练好认真！⚽`, '太厉害了！梦幻感受到了力量！'] },
       upload_wisdom: { moods: ['thinking', 'happy', 'excited', 'idle'], msgs: [`梦幻在认真听 ${player?.name} 读英文呢！📖`, 'Wonderful！梦幻也学了新单词！'] },
       upload_vitality: { moods: ['surprised', 'excited', 'happy', 'idle'], msgs: [`${player?.name} 太灵活了！梦幻也翻跟斗！🤸`, '好厉害！梦幻活力在提升！'] },
       task_done: { moods: ['excited', 'happy', 'idle'], msgs: ['任务完成！梦幻超开心！✨', '太棒了！能量增加了！'] },
@@ -188,7 +242,13 @@ export default function App() {
     run();
   }, [player]);
 
+  // ═══ UPDATED: Upload handler — once per day ═══
   const handleUpload = async (cat, act) => {
+    if (todayUploads[cat]) return; // Already done today
+    const newUploads = { ...todayUploads, [cat]: true };
+    setTodayUploads(newUploads);
+    localStorage.setItem(`uploads_${player.id}_${getToday()}`, JSON.stringify(newUploads));
+
     const newStats = { ...stats, [cat]: Math.min(stats[cat] + 5, 100) };
     setStats(newStats);
     setMewXp(x => { const nx = x + 5; if (nx >= mewLv * 100) { setMewLv(l => l + 1); return 0; } return nx; });
@@ -208,6 +268,15 @@ export default function App() {
         await db.logGrowth(player.id, t.category, 10, `Task: ${t.title}`);
       }
     }
+    triggerMew('task_done');
+  };
+
+  // ═══ NEW: Complete routine ═══
+  const completeRoutine = (routineId) => {
+    const updated = routines.map(r => r.id === routineId ? { ...r, done: true } : r);
+    setRoutines(updated);
+    localStorage.setItem(`routines_${player.id}_${getToday()}`, JSON.stringify(updated));
+    setActiveRoutineTimer(null);
     triggerMew('task_done');
   };
 
@@ -232,13 +301,16 @@ export default function App() {
   const nav = [{ id: 'home', icon: '🔮', label: '梦幻' }, { id: 'tasks', icon: '⏱', label: '任务' }, { id: 'oak', icon: '🧪', label: '博士' }, { id: 'voice', icon: '🎙', label: '对话' }, { id: 'growth', icon: '📊', label: '成长' }];
   const mewGif = MEW_MAP[mewMood] || '/mew-idle.gif';
   const xpPct = mewXp / (mewLv * 100);
+  const weekDates = getWeekDates();
+  const today = getToday();
+  const dayLabels = ['一', '二', '三', '四', '五', '六', '日'];
 
   return (
     <div style={{ width: '100%', maxWidth: 420, minHeight: '100vh', margin: '0 auto', position: 'relative', overflow: 'hidden', background: 'linear-gradient(180deg,#E8F4FD 0%,#FFF5F5 35%,#FFFAF0 65%,#F0FFF4 100%)' }}>
       <div style={{ position: 'absolute', top: -30, right: -30, opacity: 0.04, transform: 'rotate(15deg)' }}><Pokeball size={120} /></div>
       <div style={{ paddingBottom: 76, minHeight: '100vh' }}>
 
-        {/* HOME */}
+        {/* ═══ HOME ═══ */}
         {page === 'home' && <div className="slide-in" style={{ padding: '14px 14px 0' }}>
           <div style={{ background: 'linear-gradient(135deg,#E03030,#C42020)', borderRadius: 18, padding: '12px 16px', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 4px 16px rgba(224,48,48,0.2)' }}>
             <div className="flex items-center gap-2"><Pokeball size={20} color="white" /><div><p style={{ fontFamily: "'Chakra Petch'", fontSize: 15, fontWeight: 700, color: 'white' }}>MEW COMPANION</p><p style={{ fontSize: 10, color: 'rgba(255,255,255,0.7)' }}>{player.name} 的专属伙伴</p></div></div>
@@ -267,19 +339,38 @@ export default function App() {
             <AttrBar label="活力" icon="🤸" value={stats.vitality} max={100} color="#48BB78" bg="#F0FFF4" />
           </div>
 
+          {/* ═══ UPDATED: Upload buttons — disabled after used today ═══ */}
           <div className="flex gap-2">
-            {[{ icon: '⚽', label: '上传训练', act: 'upload_power', color: '#E03030', bg: '#FFF5F5', cat: 'power' }, { icon: '🎤', label: '录制朗读', act: 'upload_wisdom', color: '#3B82C4', bg: '#EFF6FF', cat: 'wisdom' }, { icon: '📷', label: '上传体操', act: 'upload_vitality', color: '#48BB78', bg: '#F0FFF4', cat: 'vitality' }].map((b, i) => (
-              <button key={i} onClick={() => handleUpload(b.cat, b.act)} className="flex-1 flex flex-col items-center gap-1.5 py-3 rounded-2xl" style={{ background: b.bg, border: `2px solid ${b.color}20`, cursor: 'pointer' }}>
-                <span style={{ fontSize: 22 }}>{b.icon}</span><span style={{ fontSize: 11, color: b.color, fontWeight: 600 }}>{b.label}</span>
-              </button>
-            ))}
+            {[
+              { icon: '⚽', label: '上传训练', act: 'upload_power', color: '#E03030', bg: '#FFF5F5', cat: 'power' },
+              { icon: '🎤', label: '录制朗读', act: 'upload_wisdom', color: '#3B82C4', bg: '#EFF6FF', cat: 'wisdom' },
+              { icon: '📷', label: '上传体操', act: 'upload_vitality', color: '#48BB78', bg: '#F0FFF4', cat: 'vitality' },
+            ].map((b, i) => {
+              const done = todayUploads[b.cat];
+              return (
+                <button key={i} onClick={() => !done && handleUpload(b.cat, b.act)}
+                  className="flex-1 flex flex-col items-center gap-1.5 py-3 rounded-2xl"
+                  style={{
+                    background: done ? '#F5F5F5' : b.bg,
+                    border: `2px solid ${done ? '#E8E8E8' : b.color + '20'}`,
+                    cursor: done ? 'default' : 'pointer',
+                    opacity: done ? 0.5 : 1,
+                  }}>
+                  <span style={{ fontSize: 22 }}>{done ? '✅' : b.icon}</span>
+                  <span style={{ fontSize: 11, color: done ? '#AAA' : b.color, fontWeight: 600 }}>
+                    {done ? '已完成' : b.label}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>}
 
-        {/* TASKS */}
+        {/* ═══ TASKS — with eating & brushing timers ═══ */}
         {page === 'tasks' && <div className="slide-in" style={{ padding: 14 }}>
+          {/* Training tasks */}
           <div style={{ background: 'linear-gradient(135deg,#F59E0B,#D69E2E)', borderRadius: 18, padding: '12px 16px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 24 }}>📋</span><div><p style={{ fontFamily: "'Chakra Petch'", fontSize: 15, fontWeight: 700, color: 'white' }}>今日任务</p><p style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)' }}>完成任务让梦幻变得更强！</p></div>
+            <span style={{ fontSize: 24 }}>📋</span><div><p style={{ fontFamily: "'Chakra Petch'", fontSize: 15, fontWeight: 700, color: 'white' }}>训练任务</p><p style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)' }}>完成任务让梦幻变得更强！</p></div>
           </div>
           {tasks.map(t => (
             <div key={t.id} style={{ background: 'white', borderRadius: 14, padding: '12px 14px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 10, border: t.done ? '2px solid #48BB7830' : '2px solid #F0F0F0', opacity: t.done ? 0.6 : 1 }}>
@@ -291,13 +382,30 @@ export default function App() {
           {activeTimer && <div className="slide-in" style={{ background: 'white', borderRadius: 18, padding: 20, marginTop: 4, marginBottom: 8, border: '2px solid #F0F0F0' }}>
             <Timer initMin={tasks.find(t => t.id === activeTimer)?.minutes || 15} label={tasks.find(t => t.id === activeTimer)?.title || ''} onComplete={() => { completeTask(activeTimer); setActiveTimer(null); }} />
           </div>}
-          <div style={{ background: 'white', borderRadius: 14, padding: '12px 14px', border: '2px solid #F0F0F0' }}>
-            <div className="flex items-center justify-between" style={{ marginBottom: 6 }}><span style={{ fontSize: 11, color: '#888', fontWeight: 600 }}>今日进度</span><span style={{ fontSize: 13, color: '#2D3748', fontWeight: 700 }}>{tasks.filter(t => t.done).length}/{tasks.length}</span></div>
-            <div style={{ height: 7, background: '#F0F0F0', borderRadius: 7 }}><div style={{ width: `${tasks.length ? (tasks.filter(t => t.done).length / tasks.length) * 100 : 0}%`, height: '100%', borderRadius: 7, transition: 'width 0.5s', background: 'linear-gradient(90deg,#E03030,#F56565)' }} /></div>
+
+          {/* ═══ NEW: Daily routine timers ═══ */}
+          <div style={{ background: 'linear-gradient(135deg,#8B5CF6,#7C3AED)', borderRadius: 18, padding: '12px 16px', marginTop: 16, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 24 }}>🌟</span><div><p style={{ fontFamily: "'Chakra Petch'", fontSize: 15, fontWeight: 700, color: 'white' }}>每日习惯</p><p style={{ fontSize: 10, color: 'rgba(255,255,255,0.8)' }}>好习惯让你更健康！</p></div>
+          </div>
+          {routines.map(r => (
+            <div key={r.id} style={{ background: 'white', borderRadius: 14, padding: '12px 14px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 10, border: r.done ? '2px solid #48BB7830' : `2px solid ${r.color}15`, opacity: r.done ? 0.6 : 1 }}>
+              <span style={{ fontSize: 24 }}>{r.icon}</span>
+              <div style={{ flex: 1 }}><p style={{ fontSize: 13, color: '#2D3748', fontWeight: 600, textDecoration: r.done ? 'line-through' : 'none' }}>{r.title}</p><p style={{ fontSize: 10, color: '#A0AEC0', marginTop: 2 }}>{r.minutes}分钟</p></div>
+              {!r.done ? <button onClick={() => setActiveRoutineTimer(activeRoutineTimer === r.id ? null : r.id)} style={{ padding: '5px 12px', borderRadius: 16, fontSize: 11, fontWeight: 600, background: activeRoutineTimer === r.id ? `${r.color}15` : '#FAFAFA', color: activeRoutineTimer === r.id ? r.color : '#999', border: activeRoutineTimer === r.id ? `1.5px solid ${r.color}30` : '1.5px solid #EEE', cursor: 'pointer' }}>{activeRoutineTimer === r.id ? '收起' : '⏱ 计时'}</button> : <span style={{ fontSize: 16 }}>✅</span>}
+            </div>
+          ))}
+          {activeRoutineTimer && <div className="slide-in" style={{ background: 'white', borderRadius: 18, padding: 20, marginTop: 4, marginBottom: 8, border: '2px solid #F0F0F0' }}>
+            <Timer initMin={routines.find(r => r.id === activeRoutineTimer)?.minutes || 3} label={routines.find(r => r.id === activeRoutineTimer)?.title || ''} onComplete={() => completeRoutine(activeRoutineTimer)} />
+          </div>}
+
+          {/* Progress */}
+          <div style={{ background: 'white', borderRadius: 14, padding: '12px 14px', marginTop: 8, border: '2px solid #F0F0F0' }}>
+            <div className="flex items-center justify-between" style={{ marginBottom: 6 }}><span style={{ fontSize: 11, color: '#888', fontWeight: 600 }}>今日总进度</span><span style={{ fontSize: 13, color: '#2D3748', fontWeight: 700 }}>{tasks.filter(t => t.done).length + routines.filter(r => r.done).length}/{tasks.length + routines.length}</span></div>
+            <div style={{ height: 7, background: '#F0F0F0', borderRadius: 7 }}><div style={{ width: `${(tasks.length + routines.length) ? ((tasks.filter(t => t.done).length + routines.filter(r => r.done).length) / (tasks.length + routines.length)) * 100 : 0}%`, height: '100%', borderRadius: 7, transition: 'width 0.5s', background: 'linear-gradient(90deg,#E03030,#F56565)' }} /></div>
           </div>
         </div>}
 
-        {/* OAK */}
+        {/* ═══ OAK ═══ */}
         {page === 'oak' && <div className="slide-in" style={{ padding: 14 }}>
           <div style={{ background: 'linear-gradient(135deg,#48BB78,#38A169)', borderRadius: 18, padding: '12px 16px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 24 }}>🔬</span><div><p style={{ fontFamily: "'Chakra Petch'", fontSize: 15, fontWeight: 700, color: 'white' }}>大木博士实验室</p></div>
@@ -318,7 +426,7 @@ export default function App() {
           </div>
         </div>}
 
-        {/* VOICE */}
+        {/* ═══ VOICE ═══ */}
         {page === 'voice' && <div className="slide-in flex flex-col" style={{ padding: 14, height: 'calc(100vh - 76px)' }}>
           <div style={{ background: 'linear-gradient(135deg,#E03030,#C42020)', borderRadius: 18, padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
@@ -355,7 +463,7 @@ export default function App() {
           </div>
         </div>}
 
-        {/* GROWTH */}
+        {/* ═══ GROWTH — fixed weekly checkin ═══ */}
         {page === 'growth' && <div className="slide-in" style={{ padding: 14 }}>
           <div style={{ background: 'linear-gradient(135deg,#3B82C4,#2B6CB0)', borderRadius: 18, padding: '12px 16px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 24 }}>📊</span><div><p style={{ fontFamily: "'Chakra Petch'", fontSize: 15, fontWeight: 700, color: 'white' }}>成长记录</p></div>
@@ -365,10 +473,36 @@ export default function App() {
             <p style={{ fontSize: 30, color: '#D69E2E', fontWeight: 900, fontFamily: "'Chakra Petch'" }}>{streak}</p>
             <p style={{ fontSize: 11, color: '#AAA' }}>天连续打卡</p>
           </div>
+
+          {/* ═══ FIXED: Weekly checkin based on real dates ═══ */}
           <div style={{ background: 'white', borderRadius: 14, padding: '12px 14px', marginBottom: 10, border: '2px solid #F0F0F0' }}>
             <p style={{ fontSize: 11, color: '#888', fontWeight: 700, marginBottom: 8 }}>本周打卡</p>
-            <div className="flex justify-between">{['一', '二', '三', '四', '五', '六', '日'].map((d, i) => (<div key={i} className="flex flex-col items-center gap-1.5"><span style={{ fontSize: 10, color: '#BBB' }}>{d}</span><div style={{ width: 32, height: 32, borderRadius: '50%', background: i < 2 ? 'linear-gradient(135deg,#E03030,#F56565)' : i === 2 ? '#FFF5F5' : '#FAFAFA', border: i === 2 ? '2px solid #E03030' : '2px solid #F0F0F0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{i < 2 ? <span style={{ color: 'white', fontSize: 12, fontWeight: 700 }}>✓</span> : i === 2 ? <span style={{ color: '#E03030', fontSize: 8 }}>●</span> : null}</div></div>))}</div>
+            <div className="flex justify-between">
+              {weekDates.map((date, i) => {
+                const isToday = date === today;
+                const checked = checkinDates.includes(date);
+                const isFuture = date > today;
+                return (
+                  <div key={i} className="flex flex-col items-center gap-1.5">
+                    <span style={{ fontSize: 10, color: isToday ? '#E03030' : '#BBB', fontWeight: isToday ? 700 : 400 }}>{dayLabels[i]}</span>
+                    <div style={{
+                      width: 32, height: 32, borderRadius: '50%',
+                      background: checked ? 'linear-gradient(135deg,#E03030,#F56565)' : isToday ? '#FFF5F5' : '#FAFAFA',
+                      border: isToday ? '2px solid #E03030' : '2px solid #F0F0F0',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      opacity: isFuture ? 0.4 : 1,
+                    }}>
+                      {checked ? <span style={{ color: 'white', fontSize: 12, fontWeight: 700 }}>✓</span>
+                        : isToday ? <span style={{ color: '#E03030', fontSize: 8 }}>●</span>
+                        : null}
+                    </div>
+                    <span style={{ fontSize: 8, color: '#CCC' }}>{date.slice(5)}</span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
+
           <div style={{ background: 'white', borderRadius: 14, padding: '12px 14px', marginBottom: 10, border: '2px solid #F0F0F0' }}>
             <p style={{ fontSize: 11, color: '#888', fontWeight: 700, marginBottom: 8 }}>属性成长</p>
             {[{ l: '⚽ 力量', v: stats.power, c: '#E03030' }, { l: '📖 智慧', v: stats.wisdom, c: '#3B82C4' }, { l: '🤸 活力', v: stats.vitality, c: '#48BB78' }].map((s, i) => (<div key={i} style={{ marginBottom: 10 }}><div className="flex justify-between" style={{ marginBottom: 3 }}><span style={{ fontSize: 11, color: '#666' }}>{s.l}</span><span style={{ fontSize: 11, color: s.c, fontWeight: 700 }}>{s.v}/100</span></div><div style={{ height: 7, background: '#F0F0F0', borderRadius: 7 }}><div style={{ width: `${s.v}%`, height: '100%', borderRadius: 7, transition: 'width 0.8s', background: s.c }} /></div></div>))}
