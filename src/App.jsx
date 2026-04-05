@@ -156,6 +156,73 @@ export default function App() {
   const recognitionRef = useRef(null);
   const endRef = useRef(null);
 
+  // ═══ English Reading Practice ═══
+  const [showReading, setShowReading] = useState(false);
+  const [readingText, setReadingText] = useState('');
+  const [isReadingRecording, setIsReadingRecording] = useState(false);
+  const [readingResult, setReadingResult] = useState(null);
+  const [readingLoading, setReadingLoading] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+
+  const readingSentences = [
+    "The cat is on the mat.", "I like to play football.", "The sun is very bright today.",
+    "My name is Leon.", "I have a pet called Mew.", "She runs very fast.",
+    "The dog is big and brown.", "I go to school every day.", "We play in the park.",
+    "The bird can fly high.", "I love my family.", "The flowers are beautiful.",
+    "He is reading a book.", "It is time for lunch.", "Can you help me please?",
+  ];
+
+  const pickNewSentence = () => { setReadingText(readingSentences[Math.floor(Math.random() * readingSentences.length)]); setReadingResult(null); };
+
+  const startReadingRec = async () => {
+    setIsReadingRecording(true); setReadingResult(null); audioChunksRef.current = [];
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } });
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      recorder.start(); mediaRecorderRef.current = recorder;
+    } catch (e) { setIsReadingRecording(false); }
+  };
+
+  const stopReadingRec = async () => {
+    setIsReadingRecording(false); setReadingLoading(true);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+      await new Promise(resolve => { mediaRecorderRef.current.onstop = resolve; });
+    }
+    try {
+      const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+      const arrayBuf = await audioBlob.arrayBuffer();
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const decoded = await audioCtx.decodeAudioData(arrayBuf);
+      const wavBuf = encodeWav(decoded);
+      const wavBlob = new Blob([wavBuf], { type: 'audio/wav' });
+      const fd = new FormData(); fd.append('audio', wavBlob, 'rec.wav'); fd.append('referenceText', readingText);
+      const res = await fetch('/api/pronunciation', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.success) {
+        setReadingResult(data);
+        const bonus = Math.round(data.scores.pronunciation / 20);
+        if (bonus > 0) { setStats(s => ({ ...s, wisdom: Math.min(s.wisdom + bonus, 100) })); setMewXp(x => { const nx = x + bonus; if (nx >= mewLv * 100) { setMewLv(l => l + 1); return 0; } return nx; }); }
+        triggerMew('upload_wisdom');
+      } else { setReadingResult({ success: false, error: data.error || '识别失败' }); }
+    } catch (e) { setReadingResult({ success: false, error: '处理失败，请重试' }); }
+    setReadingLoading(false);
+  };
+
+  function encodeWav(buffer) {
+    const ch = buffer.getChannelData(0), sr = buffer.sampleRate, len = ch.length * 2;
+    const wav = new ArrayBuffer(44 + len), v = new DataView(wav);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0,'RIFF'); v.setUint32(4,36+len,true); w(8,'WAVE'); w(12,'fmt '); v.setUint32(16,16,true);
+    v.setUint16(20,1,true); v.setUint16(22,1,true); v.setUint32(24,sr,true); v.setUint32(28,sr*2,true);
+    v.setUint16(32,2,true); v.setUint16(34,16,true); w(36,'data'); v.setUint32(40,len,true);
+    for (let i = 0; i < ch.length; i++) { const s = Math.max(-1,Math.min(1,ch[i])); v.setInt16(44+i*2, s<0?s*0x8000:s*0x7FFF, true); }
+    return wav;
+  }
+
   // ═══ NEW: Track daily upload status (once per day per category) ═══
   const [todayUploads, setTodayUploads] = useState({ power: false, wisdom: false, vitality: false });
 
@@ -430,12 +497,12 @@ export default function App() {
           <div className="flex gap-2">
             {[
               { icon: '⚽', label: '上传训练', act: 'upload_power', color: '#E03030', bg: '#FFF5F5', cat: 'power' },
-              { icon: '🎤', label: '录制朗读', act: 'upload_wisdom', color: '#3B82C4', bg: '#EFF6FF', cat: 'wisdom' },
+              { icon: '🎤', label: '录制朗读', act: 'reading', color: '#3B82C4', bg: '#EFF6FF', cat: 'wisdom' },
               { icon: '📷', label: '上传体操', act: 'upload_vitality', color: '#48BB78', bg: '#F0FFF4', cat: 'vitality' },
             ].map((b, i) => {
               const done = todayUploads[b.cat];
               return (
-                <button key={i} onClick={() => !done && handleUpload(b.cat, b.act)}
+                <button key={i} onClick={() => { if (done) return; if (b.act === 'reading') { pickNewSentence(); setShowReading(true); return; } handleUpload(b.cat, b.act); }}
                   className="flex-1 flex flex-col items-center gap-1.5 py-3 rounded-2xl"
                   style={{
                     background: done ? '#F5F5F5' : b.bg,
@@ -616,6 +683,101 @@ export default function App() {
           </div>
         </div>}
       </div>
+
+      {/* ═══ READING PRACTICE MODAL ═══ */}
+      {showReading && <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+        <div style={{ background: 'white', borderRadius: 24, padding: 20, width: '100%', maxWidth: 380, maxHeight: '80vh', overflow: 'auto' }}>
+          <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+            <h3 style={{ fontSize: 16, fontWeight: 700, color: '#3B82C4', margin: 0 }}>📖 英文朗读练习</h3>
+            <button onClick={() => { setShowReading(false); setReadingResult(null); }} style={{ background: '#F5F5F5', border: 'none', borderRadius: '50%', width: 30, height: 30, fontSize: 16, cursor: 'pointer', color: '#888' }}>✕</button>
+          </div>
+
+          {/* Sentence to read */}
+          <div style={{ background: '#EFF6FF', borderRadius: 16, padding: '16px 18px', marginBottom: 16, border: '2px solid #3B82C420' }}>
+            <p style={{ fontSize: 10, color: '#3B82C4', fontWeight: 600, marginBottom: 6 }}>请朗读以下句子：</p>
+            <p style={{ fontSize: 20, color: '#1E3A5F', fontWeight: 700, lineHeight: 1.5, margin: 0 }}>{readingText}</p>
+          </div>
+
+          {/* Record button */}
+          <div className="flex flex-col items-center gap-3" style={{ marginBottom: 16 }}>
+            {isReadingRecording && <VoiceWave active={true} color="#3B82C4" />}
+            <p style={{ fontSize: 11, color: isReadingRecording ? '#3B82C4' : '#BBB' }}>
+              {readingLoading ? '正在评估...' : isReadingRecording ? '正在录音...松开结束' : '按住按钮开始朗读'}
+            </p>
+            <button
+              onMouseDown={startReadingRec} onMouseUp={stopReadingRec}
+              onTouchStart={(e) => { e.preventDefault(); startReadingRec(); }} onTouchEnd={stopReadingRec}
+              disabled={readingLoading}
+              className={isReadingRecording ? 'rec-pulse' : ''}
+              style={{ width: 64, height: 64, borderRadius: '50%', background: isReadingRecording ? '#2563EB' : 'linear-gradient(135deg,#3B82C4,#2B6CB0)', border: '4px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 3px 14px rgba(59,130,196,0.3)', cursor: readingLoading ? 'wait' : 'pointer', opacity: readingLoading ? 0.5 : 1 }}>
+              <span style={{ fontSize: 24, color: 'white' }}>{readingLoading ? '⏳' : '🎤'}</span>
+            </button>
+          </div>
+
+          {/* Results */}
+          {readingResult && readingResult.success && <div>
+            {/* Overall scores */}
+            <div className="flex gap-2" style={{ marginBottom: 12 }}>
+              {[
+                { label: '发音', score: readingResult.scores.pronunciation, color: '#3B82C4' },
+                { label: '准确', score: readingResult.scores.accuracy, color: '#48BB78' },
+                { label: '流利', score: readingResult.scores.fluency, color: '#F59E0B' },
+              ].map((s, i) => (
+                <div key={i} style={{ flex: 1, textAlign: 'center', background: `${s.color}10`, borderRadius: 12, padding: '8px 4px', border: `1.5px solid ${s.color}20` }}>
+                  <p style={{ fontSize: 22, fontWeight: 900, color: s.score >= 80 ? '#48BB78' : s.score >= 60 ? '#F59E0B' : '#E03030', margin: 0 }}>{s.score}</p>
+                  <p style={{ fontSize: 10, color: '#888', margin: 0 }}>{s.label}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* Word-by-word results */}
+            <div style={{ marginBottom: 12 }}>
+              <p style={{ fontSize: 11, color: '#888', fontWeight: 600, marginBottom: 6 }}>逐词评估：</p>
+              <div className="flex flex-wrap gap-1.5">
+                {readingResult.words.map((w, i) => {
+                  const good = w.accuracy >= 80;
+                  const ok = w.accuracy >= 60;
+                  return (
+                    <span key={i} style={{
+                      padding: '4px 10px', borderRadius: 10, fontSize: 13, fontWeight: 600,
+                      background: good ? '#F0FFF4' : ok ? '#FFFFF0' : '#FFF5F5',
+                      color: good ? '#48BB78' : ok ? '#D69E2E' : '#E03030',
+                      border: `1.5px solid ${good ? '#C6F6D5' : ok ? '#FEFCBF' : '#FED7D7'}`,
+                    }}>
+                      {w.error === 'Omission' ? <s>{w.word}</s> : w.word}
+                      <span style={{ fontSize: 9, marginLeft: 3 }}>{good ? '✓' : w.accuracy}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Mew feedback */}
+            <div style={{ background: '#FFF5F8', borderRadius: 14, padding: '10px 14px', border: '1.5px solid #FFE0EC' }}>
+              <div className="flex items-center gap-2" style={{ marginBottom: 4 }}>
+                <img src="/mew-happy.gif" alt="" style={{ width: 24, height: 24, borderRadius: '50%', objectFit: 'cover' }} />
+                <span style={{ fontSize: 11, color: '#B83280', fontWeight: 600 }}>梦幻的评价</span>
+              </div>
+              <p style={{ fontSize: 12, color: '#6B4C5A', lineHeight: 1.6, margin: 0 }}>
+                {readingResult.scores.pronunciation >= 80
+                  ? `太棒了！${readingResult.scores.pronunciation}分！你的发音越来越好了！梦幻好开心！✨`
+                  : readingResult.scores.pronunciation >= 60
+                  ? `不错哦！${readingResult.scores.pronunciation}分！有些单词还可以再练练，加油！💪`
+                  : `梦幻听到了！得了${readingResult.scores.pronunciation}分，红色的单词要多练习哦，梦幻相信你会越来越好！🌟`}
+              </p>
+            </div>
+          </div>}
+
+          {readingResult && !readingResult.success && <div style={{ background: '#FFF5F5', borderRadius: 14, padding: '10px 14px', border: '1.5px solid #FED7D7' }}>
+            <p style={{ fontSize: 12, color: '#E03030', margin: 0 }}>没有听清楚，请再试一次哦！梦～</p>
+          </div>}
+
+          {/* Next sentence button */}
+          <button onClick={pickNewSentence} style={{ width: '100%', padding: '10px', borderRadius: 14, background: '#EFF6FF', color: '#3B82C4', fontSize: 13, fontWeight: 600, border: '2px solid #3B82C420', cursor: 'pointer', marginTop: 12 }}>
+            🔄 换一句
+          </button>
+        </div>
+      </div>}
 
       {/* NAV */}
       <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 420, background: 'white', borderTop: '2px solid #F0F0F0', padding: '5px 8px 6px', boxShadow: '0 -3px 16px rgba(0,0,0,0.04)' }}>
