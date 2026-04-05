@@ -530,7 +530,7 @@ export default function App() {
                   {m.from === 'mew' && <span style={{ fontSize: 9, color: '#B83280', fontWeight: 600, display: 'block', marginBottom: 2 }}>梦幻</span>}
                   <div style={{ background: m.from === 'user' ? 'linear-gradient(135deg,#3B82C4,#2B6CB0)' : 'white', borderRadius: 16, padding: '10px 14px', borderBottomLeftRadius: m.from === 'mew' ? 4 : 16, borderBottomRightRadius: m.from === 'user' ? 4 : 16, boxShadow: '0 1px 4px rgba(0,0,0,0.05)', border: m.from === 'mew' ? '1.5px solid #F0F0F0' : 'none' }}>
                     <p style={{ fontSize: 13, color: m.from === 'user' ? 'white' : '#444', lineHeight: 1.6, margin: 0 }}>{m.text}</p>
-                    {m.from === 'mew' && <button onClick={() => playMewVoice(m.text)} style={{ marginTop: 6, padding: '4px 12px', borderRadius: 14, background: '#FFF0F5', border: '1.5px solid #FFE0EC', color: '#E03030', fontSize: 11, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>🔊 听梦幻说</button>}
+                    {m.from === 'mew' && <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); playMewVoice(m.text); }} onTouchEnd={(e) => { e.preventDefault(); e.stopPropagation(); playMewVoice(m.text); }} style={{ marginTop: 6, padding: '6px 14px', borderRadius: 14, background: '#FFF0F5', border: '1.5px solid #FFE0EC', color: '#E03030', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4, WebkitUserSelect: 'none', WebkitTouchCallout: 'none', userSelect: 'none' }}>🔊 听梦幻说</button>}
                   </div>
                 </div>
               </div>
