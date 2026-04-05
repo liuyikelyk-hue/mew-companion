@@ -1,3 +1,4 @@
+import VoiceChat from './VoiceChat';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as db from './lib/supabase';
 
@@ -581,7 +582,15 @@ export default function App() {
         </div>}
 
         {/* ═══ VOICE — Streaming ═══ */}
-        {page === 'voice' && <div className="slide-in flex flex-col" style={{ padding: 14, height: 'calc(100vh - 76px)' }}>
+        {page === 'voice' && (
+  <VoiceChat
+    player={player}
+    stats={stats}
+    mewLv={mewLv}
+    mewMood={mewMood}
+    setMewMood={setMewMood}
+  />
+)}
           <div style={{ background: 'linear-gradient(135deg,#E03030,#C42020)', borderRadius: 18, padding: '10px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
               <img src="/mew-idle.gif" alt="" style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: '50%' }} />
