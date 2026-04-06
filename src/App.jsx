@@ -150,37 +150,32 @@ export default function App() {
   const [milestones, setMilestones] = useState([]);
   const [skills, setSkills] = useState([]);
 
-  // ═══ English Reading Practice ═══
+  // ═══ English Reading Practice (Free-form) ═══
   const [showReading, setShowReading] = useState(false);
-  const [readingText, setReadingText] = useState('');
   const [isReadingRecording, setIsReadingRecording] = useState(false);
   const [readingResult, setReadingResult] = useState(null);
   const [readingLoading, setReadingLoading] = useState(false);
+  const [readingSeconds, setReadingSeconds] = useState(0);
+  const [readingTtsPlaying, setReadingTtsPlaying] = useState(false);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
-
-  const readingSentences = [
-    "The cat is on the mat.", "I like to play football.", "The sun is very bright today.",
-    "My name is Leon.", "I have a pet called Mew.", "She runs very fast.",
-    "The dog is big and brown.", "I go to school every day.", "We play in the park.",
-    "The bird can fly high.", "I love my family.", "The flowers are beautiful.",
-    "He is reading a book.", "It is time for lunch.", "Can you help me please?",
-  ];
-
-  const pickNewSentence = () => { setReadingText(readingSentences[Math.floor(Math.random() * readingSentences.length)]); setReadingResult(null); };
+  const readingTimerRef = useRef(null);
 
   const startReadingRec = async () => {
-    setIsReadingRecording(true); setReadingResult(null); audioChunksRef.current = [];
+    setIsReadingRecording(true); setReadingResult(null); audioChunksRef.current = []; setReadingSeconds(0);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000 } });
       const recorder = new MediaRecorder(stream);
       recorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       recorder.start(); mediaRecorderRef.current = recorder;
+      // Timer to show recording duration
+      readingTimerRef.current = setInterval(() => setReadingSeconds(s => s + 1), 1000);
     } catch (e) { setIsReadingRecording(false); }
   };
 
   const stopReadingRec = async () => {
     setIsReadingRecording(false); setReadingLoading(true);
+    clearInterval(readingTimerRef.current);
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
@@ -193,7 +188,9 @@ export default function App() {
       const decoded = await audioCtx.decodeAudioData(arrayBuf);
       const wavBuf = encodeWav(decoded);
       const wavBlob = new Blob([wavBuf], { type: 'audio/wav' });
-      const fd = new FormData(); fd.append('audio', wavBlob, 'rec.wav'); fd.append('referenceText', readingText);
+      // No referenceText — let Azure recognize what was said
+      const fd = new FormData();
+      fd.append('audio', wavBlob, 'rec.wav');
       const res = await fetch('/api/pronunciation', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.success) {
@@ -204,6 +201,28 @@ export default function App() {
       } else { setReadingResult({ success: false, error: data.error || '识别失败' }); }
     } catch (e) { setReadingResult({ success: false, error: '处理失败，请重试' }); }
     setReadingLoading(false);
+  };
+
+  // Play correct pronunciation via TTS
+  const playReadingTTS = async (text) => {
+    if (!text || readingTtsPlaying) return;
+    setReadingTtsPlaying(true);
+    try {
+      const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, lang: 'en' }) });
+      if (!res.ok) throw new Error();
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audio.onended = () => { URL.revokeObjectURL(url); setReadingTtsPlaying(false); };
+      audio.onerror = () => { URL.revokeObjectURL(url); setReadingTtsPlaying(false); };
+      audio.play().catch(() => {
+        setReadingTtsPlaying(false);
+        if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(text); u.lang = 'en-US'; u.rate = 0.85; u.onend = () => setReadingTtsPlaying(false); window.speechSynthesis.speak(u); }
+      });
+    } catch (e) {
+      setReadingTtsPlaying(false);
+      if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(text); u.lang = 'en-US'; u.rate = 0.85; u.onend = () => setReadingTtsPlaying(false); window.speechSynthesis.speak(u); }
+    }
   };
 
   function encodeWav(buffer) {
@@ -395,7 +414,7 @@ export default function App() {
             ].map((b, i) => {
               const done = todayUploads[b.cat];
               return (
-                <button key={i} onClick={() => { if (done) return; if (b.act === 'reading') { pickNewSentence(); setShowReading(true); return; } handleUpload(b.cat, b.act); }}
+                <button key={i} onClick={() => { if (done) return; if (b.act === 'reading') { setReadingResult(null); setShowReading(true); return; } handleUpload(b.cat, b.act); }}
                   className="flex-1 flex flex-col items-center gap-1.5 py-3 rounded-2xl"
                   style={{
                     background: done ? '#F5F5F5' : b.bg,
@@ -535,65 +554,84 @@ export default function App() {
         </div>}
       </div>
 
-      {/* ═══ READING PRACTICE MODAL ═══ */}
+      {/* ═══ READING PRACTICE MODAL — Free-form ═══ */}
       {showReading && <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
-        <div style={{ background: 'white', borderRadius: 24, padding: 20, width: '100%', maxWidth: 380, maxHeight: '80vh', overflow: 'auto' }}>
+        <div style={{ background: 'white', borderRadius: 24, padding: 20, width: '100%', maxWidth: 380, maxHeight: '85vh', overflow: 'auto' }}>
           <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
             <h3 style={{ fontSize: 16, fontWeight: 700, color: '#3B82C4', margin: 0 }}>📖 英文朗读练习</h3>
-            <button onClick={() => { setShowReading(false); setReadingResult(null); }} style={{ background: '#F5F5F5', border: 'none', borderRadius: '50%', width: 30, height: 30, fontSize: 16, cursor: 'pointer', color: '#888' }}>✕</button>
+            <button onClick={() => { setShowReading(false); setReadingResult(null); clearInterval(readingTimerRef.current); }} style={{ background: '#F5F5F5', border: 'none', borderRadius: '50%', width: 30, height: 30, fontSize: 16, cursor: 'pointer', color: '#888' }}>✕</button>
           </div>
 
-          {/* Sentence to read */}
-          <div style={{ background: '#EFF6FF', borderRadius: 16, padding: '16px 18px', marginBottom: 16, border: '2px solid #3B82C420' }}>
-            <p style={{ fontSize: 10, color: '#3B82C4', fontWeight: 600, marginBottom: 6 }}>请朗读以下句子：</p>
-            <p style={{ fontSize: 20, color: '#1E3A5F', fontWeight: 700, lineHeight: 1.5, margin: 0 }}>{readingText}</p>
-            <button onClick={async () => {
-              try {
-                const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: readingText, lang: 'en' }) });
-                if (!res.ok) throw new Error();
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const audio = new Audio(url);
-                audio.onended = () => URL.revokeObjectURL(url);
-                audio.play().catch(() => {
-                  if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(readingText); u.lang = 'en-US'; u.rate = 0.85; window.speechSynthesis.speak(u); }
-                });
-              } catch (e) {
-                if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(readingText); u.lang = 'en-US'; u.rate = 0.85; window.speechSynthesis.speak(u); }
-              }
-            }} style={{ marginTop: 10, padding: '8px 16px', borderRadius: 14, background: '#3B82C4', color: 'white', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, margin: '10px auto 0' }}>
-              🔊 先听正确发音
-            </button>
-          </div>
+          {/* Instructions */}
+          {!readingResult && !readingLoading && !isReadingRecording && (
+            <div style={{ background: '#EFF6FF', borderRadius: 16, padding: '14px 16px', marginBottom: 16, border: '2px solid #3B82C420' }}>
+              <p style={{ fontSize: 13, color: '#1E3A5F', fontWeight: 600, margin: 0, lineHeight: 1.6 }}>
+                🎯 读任何英文都可以！课本、故事书、或者自己编一段都行。
+              </p>
+              <p style={{ fontSize: 11, color: '#6B8AB5', margin: '6px 0 0', lineHeight: 1.5 }}>
+                按住下面的按钮开始读，松开后梦幻会帮你评估发音哦～
+              </p>
+            </div>
+          )}
+
+          {/* Recording indicator */}
+          {isReadingRecording && (
+            <div style={{ background: '#EFF6FF', borderRadius: 16, padding: '16px', marginBottom: 16, border: '2px solid #3B82C4', textAlign: 'center' }}>
+              <VoiceWave active={true} color="#3B82C4" />
+              <p style={{ fontSize: 24, color: '#3B82C4', fontWeight: 700, margin: '8px 0 4px', fontFamily: "'Chakra Petch'" }}>
+                {String(Math.floor(readingSeconds / 60)).padStart(2, '0')}:{String(readingSeconds % 60).padStart(2, '0')}
+              </p>
+              <p style={{ fontSize: 11, color: '#3B82C4', margin: 0 }}>正在录音...读完松开按钮</p>
+              {readingSeconds >= 55 && <p style={{ fontSize: 10, color: '#E03030', margin: '4px 0 0' }}>快到1分钟啦！</p>}
+            </div>
+          )}
+
+          {/* Loading */}
+          {readingLoading && (
+            <div style={{ background: '#EFF6FF', borderRadius: 16, padding: '20px', marginBottom: 16, border: '2px solid #3B82C420', textAlign: 'center' }}>
+              <p style={{ fontSize: 24, margin: '0 0 8px' }}>🔍</p>
+              <p style={{ fontSize: 13, color: '#3B82C4', fontWeight: 600, margin: 0 }}>梦幻正在仔细听...</p>
+              <p style={{ fontSize: 11, color: '#888', margin: '4px 0 0' }}>正在评估你的发音</p>
+            </div>
+          )}
 
           {/* Record button */}
-          <div className="flex flex-col items-center gap-3" style={{ marginBottom: 16 }}>
-            {isReadingRecording && <VoiceWave active={true} color="#3B82C4" />}
-            <p style={{ fontSize: 11, color: isReadingRecording ? '#3B82C4' : '#BBB' }}>
-              {readingLoading ? '正在评估...' : isReadingRecording ? '正在录音...松开结束' : '按住按钮开始朗读'}
-            </p>
-            <button
-              onMouseDown={startReadingRec} onMouseUp={stopReadingRec}
-              onTouchStart={(e) => { e.preventDefault(); startReadingRec(); }} onTouchEnd={stopReadingRec}
-              disabled={readingLoading}
-              className={isReadingRecording ? 'rec-pulse' : ''}
-              style={{ width: 64, height: 64, borderRadius: '50%', background: isReadingRecording ? '#2563EB' : 'linear-gradient(135deg,#3B82C4,#2B6CB0)', border: '4px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 3px 14px rgba(59,130,196,0.3)', cursor: readingLoading ? 'wait' : 'pointer', opacity: readingLoading ? 0.5 : 1 }}>
-              <span style={{ fontSize: 24, color: 'white' }}>{readingLoading ? '⏳' : '🎤'}</span>
-            </button>
-          </div>
+          {!readingLoading && (
+            <div className="flex flex-col items-center gap-3" style={{ marginBottom: 16 }}>
+              <button
+                onMouseDown={startReadingRec} onMouseUp={stopReadingRec}
+                onTouchStart={(e) => { e.preventDefault(); startReadingRec(); }}
+                onTouchEnd={(e) => { e.preventDefault(); stopReadingRec(); }}
+                disabled={readingLoading}
+                className={isReadingRecording ? 'rec-pulse' : ''}
+                style={{ width: 72, height: 72, borderRadius: '50%', background: isReadingRecording ? '#2563EB' : 'linear-gradient(135deg,#3B82C4,#2B6CB0)', border: '4px solid white', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: isReadingRecording ? '0 0 24px rgba(59,130,196,0.4)' : '0 3px 14px rgba(59,130,196,0.3)', cursor: 'pointer' }}>
+                <span style={{ fontSize: 28, color: 'white' }}>{isReadingRecording ? '⏹' : '🎤'}</span>
+              </button>
+              <p style={{ fontSize: 11, color: isReadingRecording ? '#3B82C4' : '#BBB', fontWeight: 500 }}>
+                {isReadingRecording ? '松开结束录音' : '按住开始朗读英文'}
+              </p>
+            </div>
+          )}
 
-          {/* Results */}
+          {/* ═══ Results ═══ */}
           {readingResult && readingResult.success && <div>
+            {/* Recognized text */}
+            <div style={{ background: '#F0F9FF', borderRadius: 14, padding: '12px 14px', marginBottom: 12, border: '1.5px solid #3B82C420' }}>
+              <p style={{ fontSize: 10, color: '#3B82C4', fontWeight: 600, marginBottom: 4 }}>梦幻听到你说：</p>
+              <p style={{ fontSize: 14, color: '#1E3A5F', fontWeight: 600, lineHeight: 1.6, margin: 0 }}>{readingResult.recognizedText}</p>
+            </div>
+
             {/* Overall scores */}
             <div className="flex gap-2" style={{ marginBottom: 12 }}>
               {[
                 { label: '发音', score: readingResult.scores.pronunciation, color: '#3B82C4' },
                 { label: '准确', score: readingResult.scores.accuracy, color: '#48BB78' },
                 { label: '流利', score: readingResult.scores.fluency, color: '#F59E0B' },
+                { label: '完整', score: readingResult.scores.completeness, color: '#8B5CF6' },
               ].map((s, i) => (
                 <div key={i} style={{ flex: 1, textAlign: 'center', background: `${s.color}10`, borderRadius: 12, padding: '8px 4px', border: `1.5px solid ${s.color}20` }}>
-                  <p style={{ fontSize: 22, fontWeight: 900, color: s.score >= 80 ? '#48BB78' : s.score >= 60 ? '#F59E0B' : '#E03030', margin: 0 }}>{s.score}</p>
-                  <p style={{ fontSize: 10, color: '#888', margin: 0 }}>{s.label}</p>
+                  <p style={{ fontSize: 20, fontWeight: 900, color: s.score >= 80 ? '#48BB78' : s.score >= 60 ? '#F59E0B' : '#E03030', margin: 0 }}>{s.score}</p>
+                  <p style={{ fontSize: 9, color: '#888', margin: 0 }}>{s.label}</p>
                 </div>
               ))}
             </div>
@@ -620,23 +658,11 @@ export default function App() {
               </div>
             </div>
 
-            {/* Listen to correct pronunciation after assessment */}
-            <button onClick={async () => {
-              try {
-                const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: readingText, lang: 'en' }) });
-                if (!res.ok) throw new Error();
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const audio = new Audio(url);
-                audio.onended = () => URL.revokeObjectURL(url);
-                audio.play().catch(() => {
-                  if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(readingText); u.lang = 'en-US'; u.rate = 0.85; window.speechSynthesis.speak(u); }
-                });
-              } catch (e) {
-                if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(readingText); u.lang = 'en-US'; u.rate = 0.85; window.speechSynthesis.speak(u); }
-              }
-            }} style={{ width: '100%', padding: '10px', borderRadius: 14, background: '#EFF6FF', color: '#3B82C4', fontSize: 13, fontWeight: 600, border: '2px solid #3B82C420', cursor: 'pointer', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
-              🔊 再听一遍正确发音
+            {/* Listen to correct pronunciation */}
+            <button onClick={() => playReadingTTS(readingResult.recognizedText)}
+              disabled={readingTtsPlaying}
+              style={{ width: '100%', padding: '12px', borderRadius: 14, background: readingTtsPlaying ? '#3B82C4' : '#EFF6FF', color: readingTtsPlaying ? 'white' : '#3B82C4', fontSize: 13, fontWeight: 600, border: '2px solid #3B82C420', cursor: 'pointer', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              {readingTtsPlaying ? '🔊 梦幻正在读...' : '🔊 听梦幻读一遍'}
             </button>
 
             {/* Mew feedback */}
@@ -649,20 +675,26 @@ export default function App() {
                 {readingResult.scores.pronunciation >= 80
                   ? `太棒了！${readingResult.scores.pronunciation}分！你的发音越来越好了！梦幻好开心！✨`
                   : readingResult.scores.pronunciation >= 60
-                  ? `不错哦！${readingResult.scores.pronunciation}分！有些单词还可以再练练，加油！💪`
-                  : `梦幻听到了！得了${readingResult.scores.pronunciation}分，红色的单词要多练习哦，梦幻相信你会越来越好！🌟`}
+                  ? `不错哦！${readingResult.scores.pronunciation}分！红色的单词可以跟着梦幻再练练，加油！💪`
+                  : `梦幻听到了！得了${readingResult.scores.pronunciation}分，点上面的按钮听梦幻读，跟着练习哦！🌟`}
               </p>
             </div>
+
+            {/* Try again button */}
+            <button onClick={() => setReadingResult(null)} style={{ width: '100%', padding: '10px', borderRadius: 14, background: '#F0FFF4', color: '#48BB78', fontSize: 13, fontWeight: 600, border: '2px solid #48BB7820', cursor: 'pointer', marginTop: 10 }}>
+              🔄 再读一次
+            </button>
           </div>}
 
-          {readingResult && !readingResult.success && <div style={{ background: '#FFF5F5', borderRadius: 14, padding: '10px 14px', border: '1.5px solid #FED7D7' }}>
-            <p style={{ fontSize: 12, color: '#E03030', margin: 0 }}>没有听清楚，请再试一次哦！梦～</p>
+          {readingResult && !readingResult.success && <div>
+            <div style={{ background: '#FFF5F5', borderRadius: 14, padding: '14px', border: '1.5px solid #FED7D7', textAlign: 'center' }}>
+              <p style={{ fontSize: 14, margin: '0 0 6px' }}>😅</p>
+              <p style={{ fontSize: 13, color: '#E03030', fontWeight: 600, margin: 0 }}>{readingResult.error}</p>
+            </div>
+            <button onClick={() => setReadingResult(null)} style={{ width: '100%', padding: '10px', borderRadius: 14, background: '#EFF6FF', color: '#3B82C4', fontSize: 13, fontWeight: 600, border: '2px solid #3B82C420', cursor: 'pointer', marginTop: 12 }}>
+              🔄 再试一次
+            </button>
           </div>}
-
-          {/* Next sentence button */}
-          <button onClick={pickNewSentence} style={{ width: '100%', padding: '10px', borderRadius: 14, background: '#EFF6FF', color: '#3B82C4', fontSize: 13, fontWeight: 600, border: '2px solid #3B82C420', cursor: 'pointer', marginTop: 12 }}>
-            🔄 换一句
-          </button>
         </div>
       </div>}
 
