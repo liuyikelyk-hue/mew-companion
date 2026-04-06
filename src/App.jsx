@@ -547,6 +547,23 @@ export default function App() {
           <div style={{ background: '#EFF6FF', borderRadius: 16, padding: '16px 18px', marginBottom: 16, border: '2px solid #3B82C420' }}>
             <p style={{ fontSize: 10, color: '#3B82C4', fontWeight: 600, marginBottom: 6 }}>请朗读以下句子：</p>
             <p style={{ fontSize: 20, color: '#1E3A5F', fontWeight: 700, lineHeight: 1.5, margin: 0 }}>{readingText}</p>
+            <button onClick={async () => {
+              try {
+                const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: readingText, lang: 'en' }) });
+                if (!res.ok) throw new Error();
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                audio.onended = () => URL.revokeObjectURL(url);
+                audio.play().catch(() => {
+                  if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(readingText); u.lang = 'en-US'; u.rate = 0.85; window.speechSynthesis.speak(u); }
+                });
+              } catch (e) {
+                if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(readingText); u.lang = 'en-US'; u.rate = 0.85; window.speechSynthesis.speak(u); }
+              }
+            }} style={{ marginTop: 10, padding: '8px 16px', borderRadius: 14, background: '#3B82C4', color: 'white', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, margin: '10px auto 0' }}>
+              🔊 先听正确发音
+            </button>
           </div>
 
           {/* Record button */}
@@ -602,6 +619,25 @@ export default function App() {
                 })}
               </div>
             </div>
+
+            {/* Listen to correct pronunciation after assessment */}
+            <button onClick={async () => {
+              try {
+                const res = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: readingText, lang: 'en' }) });
+                if (!res.ok) throw new Error();
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                audio.onended = () => URL.revokeObjectURL(url);
+                audio.play().catch(() => {
+                  if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(readingText); u.lang = 'en-US'; u.rate = 0.85; window.speechSynthesis.speak(u); }
+                });
+              } catch (e) {
+                if ('speechSynthesis' in window) { const u = new SpeechSynthesisUtterance(readingText); u.lang = 'en-US'; u.rate = 0.85; window.speechSynthesis.speak(u); }
+              }
+            }} style={{ width: '100%', padding: '10px', borderRadius: 14, background: '#EFF6FF', color: '#3B82C4', fontSize: 13, fontWeight: 600, border: '2px solid #3B82C420', cursor: 'pointer', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              🔊 再听一遍正确发音
+            </button>
 
             {/* Mew feedback */}
             <div style={{ background: '#FFF5F8', borderRadius: 14, padding: '10px 14px', border: '1.5px solid #FFE0EC' }}>
