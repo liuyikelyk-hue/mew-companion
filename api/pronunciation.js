@@ -90,8 +90,28 @@ export default async function handler(req) {
     // ════════════════════════════════════════
     // STEP 2: Pronunciation assessment
     // ════════════════════════════════════════
+    
+    // Clean reference text: Azure pronunciation assessment doesn't accept
+    // certain punctuation in ReferenceText. Keep only letters, numbers, spaces, apostrophes, hyphens.
+    const cleanRef = recognizedText
+      .replace(/[^\w\s'-]/g, '')  // remove punctuation except apostrophe and hyphen
+      .replace(/\s+/g, ' ')       // collapse multiple spaces
+      .trim();
+
+    if (!cleanRef) {
+      return jsonResponse({
+        success: true,
+        recognizedText,
+        scores: { pronunciation: 0, accuracy: 0, fluency: 0, completeness: 0 },
+        words: [],
+        note: '识别到的内容太短，无法评估发音',
+      });
+    }
+
+    console.log('Step2 using ReferenceText:', cleanRef);
+
     const pronConfig = {
-      ReferenceText: recognizedText,
+      ReferenceText: cleanRef,
       GradingSystem: 'HundredMark',
       Granularity: 'Word',
       Dimension: 'Comprehensive',
@@ -123,6 +143,7 @@ export default async function handler(req) {
     if (!assessRes.ok) {
       const errBody = await assessRes.text();
       console.error('Step2 assessment HTTP error:', assessRes.status, errBody);
+      console.error('Step2 config was:', JSON.stringify(pronConfig));
       
       // Return recognition result even if assessment fails
       return jsonResponse({
