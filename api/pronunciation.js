@@ -1,6 +1,6 @@
-// /api/pronunciation.js — Azure Speech: recognize + pronunciation assessment
-// Supports free-form reading: no reference text needed
-// Flow: audio → Azure recognizes what was said → scores pronunciation
+// /api/pronunciation.js — Azure Speech: single-pass pronunciation assessment
+// Uses "Topic" mode for free-form reading (no reference text needed)
+// One request = recognition + pronunciation scores + word-level detail
 
 export const config = {
   runtime: 'edge',
@@ -29,10 +29,9 @@ export default async function handler(req) {
   }
 
   try {
-    // Parse multipart form data
     const formData = await req.formData();
     const audioFile = formData.get('audio');
-    const referenceText = formData.get('referenceText') || '';
+    const referenceText = (formData.get('referenceText') || '').trim();
 
     if (!audioFile) {
       return new Response(JSON.stringify({ success: false, error: 'No audio file' }), {
@@ -43,58 +42,37 @@ export default async function handler(req) {
 
     const audioBuffer = await audioFile.arrayBuffer();
 
-    // If no reference text, first do a recognition pass to get what was said
-    let finalReferenceText = referenceText.trim();
-
-    if (!finalReferenceText) {
-      // Step 1: Simple speech recognition to get the text
-      const recognizeUrl = `https://${AZURE_REGION}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US`;
-
-      const recResponse = await fetch(recognizeUrl, {
-        method: 'POST',
-        headers: {
-          'Ocp-Apim-Subscription-Key': AZURE_KEY,
-          'Content-Type': 'audio/wav',
-          'Accept': 'application/json',
-        },
-        body: audioBuffer,
-      });
-
-      if (!recResponse.ok) {
-        const errText = await recResponse.text();
-        console.error('Recognition error:', errText);
-        return new Response(JSON.stringify({ success: false, error: '语音识别失败，请重试' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-
-      const recResult = await recResponse.json();
-
-      if (recResult.RecognitionStatus !== 'Success' || !recResult.DisplayText) {
-        return new Response(JSON.stringify({ success: false, error: '没有听清楚，请大声一点再试试！' }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        });
-      }
-
-      finalReferenceText = recResult.DisplayText;
+    // Build pronunciation assessment config
+    // If referenceText is provided, use "ReadingAloud" mode
+    // If not, use "Topic" mode for free-form speech
+    let pronConfig;
+    if (referenceText) {
+      pronConfig = {
+        ReferenceText: referenceText,
+        GradingSystem: 'HundredMark',
+        Granularity: 'Word',
+        Dimension: 'Comprehensive',
+        EnableMiscue: true,
+      };
+    } else {
+      pronConfig = {
+        ReferenceText: '',
+        GradingSystem: 'HundredMark',
+        Granularity: 'Word',
+        Dimension: 'Comprehensive',
+        EnableMiscue: false,
+        ScenarioId: '',
+      };
     }
 
-    // Step 2: Pronunciation assessment with the reference text
-    const pronConfig = {
-      ReferenceText: finalReferenceText,
-      GradingSystem: 'HundredMark',
-      Granularity: 'Word',
-      Dimension: 'Comprehensive',
-      EnableMiscue: true,
-    };
+    // Base64 encode the config
+    const pronConfigJson = JSON.stringify(pronConfig);
+    const pronConfigBase64 = btoa(unescape(encodeURIComponent(pronConfigJson)));
 
-    const pronConfigBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(pronConfig))));
+    // Single request: recognition + pronunciation assessment
+    const url = `https://${AZURE_REGION}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=detailed`;
 
-    const assessUrl = `https://${AZURE_REGION}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US`;
-
-    const assessResponse = await fetch(assessUrl, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Ocp-Apim-Subscription-Key': AZURE_KEY,
@@ -105,61 +83,142 @@ export default async function handler(req) {
       body: audioBuffer,
     });
 
-    if (!assessResponse.ok) {
-      const errText = await assessResponse.text();
-      console.error('Assessment error:', errText);
-      return new Response(JSON.stringify({ success: false, error: '发音评估失败，请重试' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error('Azure API error:', response.status, errText);
+      return jsonResponse({ success: false, error: `Azure 服务错误 (${response.status})，请重试` });
+    }
+
+    const result = await response.json();
+    console.log('Azure response:', JSON.stringify(result).slice(0, 500));
+
+    // Check recognition status
+    if (result.RecognitionStatus !== 'Success') {
+      const statusMsg = {
+        'NoMatch': '没有听到英文，请对着麦克风大声读哦！',
+        'InitialSilenceTimeout': '没有检测到声音，请确认麦克风正常工作',
+        'EndSilenceTimeout': '录音太短了，请多读一些内容',
+      };
+      return jsonResponse({
+        success: false,
+        error: statusMsg[result.RecognitionStatus] || '没有听清楚，请再试一次',
       });
     }
 
-    const assessResult = await assessResponse.json();
+    // Extract data - try NBest first, then fall back to top-level fields
+    const nBest = result.NBest?.[0];
 
-    if (assessResult.RecognitionStatus !== 'Success') {
-      return new Response(JSON.stringify({ success: false, error: '没有听清楚，请再试一次' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
+    // Get recognized text
+    const recognizedText = nBest?.Display || nBest?.Lexical || result.DisplayText || result.RecognizedText || '';
+
+    if (!recognizedText) {
+      return jsonResponse({ success: false, error: '没有识别到内容，请再试一次' });
+    }
+
+    // Get pronunciation scores
+    const pa = nBest?.PronunciationAssessment;
+
+    if (pa) {
+      // Full pronunciation assessment available
+      const words = (nBest.Words || []).map(w => ({
+        word: w.Word,
+        accuracy: Math.round(w.PronunciationAssessment?.AccuracyScore ?? 0),
+        error: w.PronunciationAssessment?.ErrorType || 'None',
+      }));
+
+      return jsonResponse({
+        success: true,
+        recognizedText,
+        scores: {
+          pronunciation: Math.round(pa.PronScore ?? pa.PronunciationScore ?? 0),
+          accuracy: Math.round(pa.AccuracyScore ?? 0),
+          fluency: Math.round(pa.FluencyScore ?? 0),
+          completeness: Math.round(pa.CompletenessScore ?? 100),
+        },
+        words,
       });
     }
 
-    // Extract pronunciation assessment scores
-    const nBest = assessResult.NBest?.[0];
-    if (!nBest || !nBest.PronunciationAssessment) {
-      return new Response(JSON.stringify({ success: false, error: '评估数据异常，请重试' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
+    // Fallback: if pronunciation assessment header didn't work,
+    // do a second request WITH the recognized text as reference
+    console.log('No PronunciationAssessment in response, retrying with reference text...');
 
-    const pa = nBest.PronunciationAssessment;
-    const words = (nBest.Words || []).map(w => ({
-      word: w.Word,
-      accuracy: Math.round(w.PronunciationAssessment?.AccuracyScore ?? 0),
-      error: w.PronunciationAssessment?.ErrorType || 'None',
-    }));
-
-    const result = {
-      success: true,
-      recognizedText: finalReferenceText,
-      scores: {
-        pronunciation: Math.round(pa.PronScore ?? 0),
-        accuracy: Math.round(pa.AccuracyScore ?? 0),
-        fluency: Math.round(pa.FluencyScore ?? 0),
-        completeness: Math.round(pa.CompletenessScore ?? 0),
-      },
-      words,
+    const retryConfig = {
+      ReferenceText: recognizedText,
+      GradingSystem: 'HundredMark',
+      Granularity: 'Word',
+      Dimension: 'Comprehensive',
+      EnableMiscue: true,
     };
+    const retryConfigBase64 = btoa(unescape(encodeURIComponent(JSON.stringify(retryConfig))));
 
-    return new Response(JSON.stringify(result), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
+    const retryUrl = `https://${AZURE_REGION}.stt.speech.microsoft.com/speech/recognition/conversation/cognitiveservices/v1?language=en-US&format=detailed`;
+
+    const retryResponse = await fetch(retryUrl, {
+      method: 'POST',
+      headers: {
+        'Ocp-Apim-Subscription-Key': AZURE_KEY,
+        'Content-Type': 'audio/wav',
+        'Accept': 'application/json',
+        'Pronunciation-Assessment': retryConfigBase64,
+      },
+      body: audioBuffer,
+    });
+
+    if (!retryResponse.ok) {
+      // Even retry failed — return recognition result without scores
+      return jsonResponse({
+        success: true,
+        recognizedText,
+        scores: { pronunciation: 0, accuracy: 0, fluency: 0, completeness: 0 },
+        words: [],
+        note: '发音评估暂时不可用，但梦幻听到了你读的内容',
+      });
+    }
+
+    const retryResult = await retryResponse.json();
+    console.log('Retry response:', JSON.stringify(retryResult).slice(0, 500));
+
+    const retryNBest = retryResult.NBest?.[0];
+    const retryPa = retryNBest?.PronunciationAssessment;
+
+    if (retryPa) {
+      const words = (retryNBest.Words || []).map(w => ({
+        word: w.Word,
+        accuracy: Math.round(w.PronunciationAssessment?.AccuracyScore ?? 0),
+        error: w.PronunciationAssessment?.ErrorType || 'None',
+      }));
+
+      return jsonResponse({
+        success: true,
+        recognizedText,
+        scores: {
+          pronunciation: Math.round(retryPa.PronScore ?? retryPa.PronunciationScore ?? 0),
+          accuracy: Math.round(retryPa.AccuracyScore ?? 0),
+          fluency: Math.round(retryPa.FluencyScore ?? 0),
+          completeness: Math.round(retryPa.CompletenessScore ?? 100),
+        },
+        words,
+      });
+    }
+
+    // Last resort: return what we have
+    return jsonResponse({
+      success: true,
+      recognizedText,
+      scores: { pronunciation: 0, accuracy: 0, fluency: 0, completeness: 0 },
+      words: [],
+      note: '梦幻听到了你的朗读，但评分功能暂时有问题',
     });
   } catch (error) {
     console.error('Pronunciation API error:', error);
-    return new Response(JSON.stringify({ success: false, error: '处理失败，请重试' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return jsonResponse({ success: false, error: '处理失败，请重试' });
   }
+}
+
+function jsonResponse(data) {
+  return new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
